@@ -1,83 +1,128 @@
+// server/routes/record.js
 import express from "express";
-
-// This will help us connect to the database
 import db from "../db/connection.js";
-
-// This help convert the id from string to ObjectId for the _id.
 import { ObjectId } from "mongodb";
+import multer from "multer";
+import xlsx from "xlsx";
 
-// router is an instance of the express router.
-// We use it to define our routes.
-// The router will be added as a middleware and will take control of requests starting with path /record.
 const router = express.Router();
+const memoryStorage = multer.memoryStorage();
+const upload = multer({ storage: memoryStorage });
 
-// This section will help you get a list of all the records.
+// Get all records
 router.get("/", async (req, res) => {
-  let collection = await db.collection("records");
-  let results = await collection.find({}).toArray();
-  res.send(results).status(200);
+  try {
+    const collection = await db.collection("records");
+    const allRecords = await collection.find({}).toArray();
+    res.status(200).send(allRecords);
+  } catch (err) {
+    console.error("Error retrieving records:", err);
+    res.status(500).send("Error retrieving records");
+  }
 });
 
-// This section will help you get a single record by id
+// Get a single record by ID
 router.get("/:id", async (req, res) => {
-  let collection = await db.collection("records");
-  let query = { _id: new ObjectId(req.params.id) };
-  let result = await collection.findOne(query);
+  try {
+    const collection = await db.collection("records");
+    const singleRecord = await collection.findOne({ _id: new ObjectId(req.params.id) });
 
-  if (!result) res.send("Not found").status(404);
-  else res.send(result).status(200);
+    if (!singleRecord) return res.status(404).send("Record not found");
+    res.status(200).send(singleRecord);
+  } catch (err) {
+    console.error("Error fetching record:", err);
+    res.status(500).send("Error fetching record");
+  }
 });
 
-// This section will help you create a new record.
+// Create a new record
 router.post("/", async (req, res) => {
   try {
-    let newDocument = {
+    const newEntry = {
       name: req.body.name,
       position: req.body.position,
       level: req.body.level,
     };
-    let collection = await db.collection("records");
-    let result = await collection.insertOne(newDocument);
-    res.send(result).status(204);
+    const collection = await db.collection("records");
+    const insertResult = await collection.insertOne(newEntry);
+    res.status(201).send(insertResult);
   } catch (err) {
-    console.error(err);
-    res.status(500).send("Error adding record");
+    console.error("Error creating record:", err);
+    res.status(500).send("Error creating record");
   }
 });
 
-// This section will help you update a record by id.
+// Update a record by ID
 router.patch("/:id", async (req, res) => {
   try {
     const query = { _id: new ObjectId(req.params.id) };
-    const updates = {
+    const updateData = {
       $set: {
         name: req.body.name,
         position: req.body.position,
         level: req.body.level,
       },
     };
-
-    let collection = await db.collection("records");
-    let result = await collection.updateOne(query, updates);
-    res.send(result).status(200);
+    const collection = await db.collection("records");
+    const updateResult = await collection.updateOne(query, updateData);
+    res.status(200).send(updateResult);
   } catch (err) {
-    console.error(err);
+    console.error("Error updating record:", err);
     res.status(500).send("Error updating record");
   }
 });
 
-// This section will help you delete a record
+// Delete a record by ID
 router.delete("/:id", async (req, res) => {
   try {
     const query = { _id: new ObjectId(req.params.id) };
-
-    const collection = db.collection("records");
-    let result = await collection.deleteOne(query);
-
-    res.send(result).status(200);
+    const collection = await db.collection("records");
+    const deleteResult = await collection.deleteOne(query);
+    res.status(200).send(deleteResult);
   } catch (err) {
-    console.error(err);
+    console.error("Error deleting record:", err);
     res.status(500).send("Error deleting record");
+  }
+});
+
+// Bulk delete records
+router.post("/bulk-delete", async (req, res) => {
+  try {
+    const { ids } = req.body;
+    const objectIds = ids.map((id) => new ObjectId(id));
+    const collection = await db.collection("records");
+    const bulkDeleteResult = await collection.deleteMany({ _id: { $in: objectIds } });
+    res.status(200).send({ message: "Records deleted successfully", result: bulkDeleteResult });
+  } catch (err) {
+    console.error("Error during bulk deletion:", err);
+    res.status(500).send("Error deleting records");
+  }
+});
+
+// Upload Excel and insert records
+router.post("/upload-excel", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).send("No file uploaded");
+    }
+
+    const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const parsedData = xlsx.utils.sheet_to_json(sheet);
+
+    const formattedRecords = parsedData.map((record) => ({
+      name: record["Name"],      // Excel column 'Name'
+      position: record["Position"], // Excel column 'Position'
+      level: record["Level"],       // Excel column 'Level'
+    }));
+
+    const collection = await db.collection("records");
+    const bulkInsertResult = await collection.insertMany(formattedRecords);
+    res.status(200).send({ message: "Records uploaded successfully", result: bulkInsertResult });
+  } catch (err) {
+    console.error("Error uploading records from Excel:", err);
+    res.status(500).send("Error uploading records");
   }
 });
 
